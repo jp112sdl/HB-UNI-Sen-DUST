@@ -25,9 +25,6 @@ SdsDustSensor sds(rxPin, txPin);
 
 using namespace as;
 
-//Korrekturfaktor der Clock-Ungenauigkeit, wenn keine RTC verwendet wird
-#define SYSCLOCK_FACTOR    0.88
-
 // define all device properties
 const struct DeviceInfo PROGMEM devinfo = {
   {0xF3, 0x14, 0x00},          // Device ID
@@ -41,16 +38,16 @@ const struct DeviceInfo PROGMEM devinfo = {
 typedef AskSin<StatusLed<LED_PIN>, NoBattery, Radio<AvrSPI<10, 11, 12, 13>, 2>> Hal;
 Hal hal;
 
-DEFREGISTER(SDSReg0, MASTERID_REGS, 0x20, 0x21)
+DEFREGISTER(SDSReg0, MASTERID_REGS, 0x21, 0x22)
 class SDSList0 : public RegList0<SDSReg0> {
   public:
     SDSList0 (uint16_t addr) : RegList0<SDSReg0>(addr) {}
 
     bool Sendeintervall (uint16_t value) const {
-      return this->writeRegister(0x20, (value >> 8) & 0xff) && this->writeRegister(0x21, value & 0xff);
+      return this->writeRegister(0x21, (value >> 8) & 0xff) && this->writeRegister(0x22, value & 0xff);
     }
     uint16_t Sendeintervall () const {
-      return (this->readRegister(0x20, 0) << 8) + this->readRegister(0x21, 0);
+      return (this->readRegister(0x21, 0) << 8) + this->readRegister(0x22, 0);
     }
 
     void defaults () {
@@ -59,66 +56,135 @@ class SDSList0 : public RegList0<SDSReg0> {
     }
 };
 
-DEFREGISTER(SDSReg1, 0x01, 0x02, 0x03)
+DEFREGISTER(SDSReg1, 0x1f, 0x20, 0x1e)
 class SDSList1 : public RegList1<SDSReg1> {
   public:
     SDSList1 (uint16_t addr) : RegList1<SDSReg1>(addr) {}
+
+    bool Messintervall (uint16_t value) const {
+      return this->writeRegister(0x1f, (value >> 8) & 0xff) && this->writeRegister(0x20, value & 0xff);
+    }
+    uint16_t Messintervall () const {
+      return (this->readRegister(0x1f, 0) << 8) + this->readRegister(0x20, 0);
+    }
+
+    bool ReadRetryCount (uint8_t value) const {
+      return this->writeRegister(0x1e, value & 0xff);
+    }
+    uint8_t ReadRetryCount () const {
+      return this->readRegister(0x1e, 0);
+    }
+
     void defaults () {
       clear();
+      Messintervall(10);
+      ReadRetryCount(3);
     }
 };
 
 class MeasureEventMsg : public Message {
   public:
-    void init(uint8_t msgcnt, uint8_t channel, uint16_t pm25, uint16_t pm10, uint8_t flags) {
-      Message::init(0x11, msgcnt, 0x53, BIDI | WKMEUP, channel & 0xff, (pm25 >> 8) & 0xff);
-      pload[0] = pm25 & 0xff;
-      pload[1] = (pm10 >> 8) & 0xff ;
-      pload[2] = pm10 & 0xff;
-      pload[3] = flags & 0xff;
+    void init(uint8_t msgcnt, uint8_t channel, uint16_t pm25avg, uint16_t pm10avg,uint16_t pm25max, uint16_t pm10max,uint16_t pm25min, uint16_t pm10min, uint8_t flags) {
+      Message::init(0x17, msgcnt, 0x53, BIDI | WKMEUP, channel & 0xff, (flags) & 0xff);
+
+      DPRINT("pm25avg: ");DDECLN(pm25avg);
+      DPRINT("pm25max: ");DDECLN(pm25max);
+      DPRINT("pm25min: ");DDECLN(pm25min);
+
+      pload[0] = (pm25avg >> 8) & 0xff;
+      pload[1] = pm25avg & 0xff;
+      pload[2] = (pm10avg >> 8) & 0xff ;
+      pload[3] = pm10avg & 0xff;
+
+      pload[4] = (pm25max >> 8) & 0xff;
+      pload[5] = pm25max & 0xff;
+      pload[6] = (pm10max >> 8) & 0xff ;
+      pload[7] = pm10max & 0xff;
+
+      pload[8] = (pm25min >> 8) & 0xff;
+      pload[9] = pm25min & 0xff;
+      pload[10] = (pm10min >> 8) & 0xff ;
+      pload[11] = pm10min & 0xff;
+
     }
 };
 
 class MeasureChannel : public Channel<Hal, SDSList1, EmptyList, List4, PEERS_PER_CHANNEL, SDSList0>, public Alarm {
     MeasureEventMsg msg;
-    uint16_t        pm25;
-    uint16_t        pm10;
+    uint16_t        pm25avg;
+    uint16_t        pm10avg;
+    uint16_t        pm25max;
+    uint16_t        pm10max;
+    uint16_t        pm25min;
+    uint16_t        pm10min;
     Status          error_flag;
+    uint16_t        measure_count;
+    uint16_t        valid_measure_count;
   public:
-    MeasureChannel () : Channel(), Alarm(2), pm25(0), pm10(0), error_flag(Status::Ok) {}
+    MeasureChannel () : Channel(), Alarm(3), pm25avg(0), pm10avg(0), pm25max(0), pm10max(0), pm25min(0), pm10min(0), error_flag(Status::Ok), measure_count(0), valid_measure_count(0) {}
     virtual ~MeasureChannel () {}
 
     void measure() {
       DPRINTLN("MEASURE...");
 
-      PmResult pm = sds.readPm(); error_flag = pm.status;
+      if (measure_count == 0) {
+        valid_measure_count = 0;
+        pm25avg = 0;
+        pm10avg = 0;
+        pm25max = 0;
+        pm10max = 0;
+        pm25min = 0xffff;
+        pm10min = 0xffff;
+      }
 
-      if (!pm.isOk()) { DPRINTLN("FAIL - retry"); _delay_ms(500); pm = sds.readPm(); error_flag = pm.status;} //second chance :)
+      PmResult pm = sds.readPm(); error_flag = pm.status;
+      uint8_t retrycount = 0;
+
+      while (retrycount < this->getList1().ReadRetryCount()) {
+        retrycount++;
+        if (!pm.isOk()) { DPRINT("FAIL - retry #");DDECLN(retrycount); _delay_ms(200); pm = sds.readPm(); error_flag = pm.status;} else break;//second chance :)
+        sds.setActiveReportingMode();
+      }
 
       if (pm.isOk()) {
-        pm25 = pm.pm25 * 10;
-        pm10 = pm.pm10 * 10;
+        uint16_t pm25 = pm.pm25 * 10;
+        uint16_t pm10 = pm.pm10 * 10;
         DPRINT("PM25: ");DDECLN(pm25);
         DPRINT("PM10: ");DDECLN(pm10);
+
+        if (pm25 > pm25max) pm25max = pm25;
+        if (pm10 > pm10max) pm10max = pm10;
+
+        if (pm25 < pm25min) pm25min = pm25;
+        if (pm10 < pm10min) pm10min = pm10;
+
+        pm25avg += pm25;
+        pm10avg += pm10;
+
+        valid_measure_count++;
       } else {
         DPRINTLN("FAIL - again");
       }
+
+      measure_count++;
     }
 
     virtual void trigger (__attribute__ ((unused)) AlarmClock& clock) {
-      tick = delay();
+      uint16_t measureInterval = max(10,this->getList1().Messintervall());
+      uint16_t sendInterval    = max(30,device().getList0().Sendeintervall());
+      set(seconds2ticks(measureInterval));
       measure();
-      msg.init(device().nextcount(), number(), pm25, pm10, flags());
-      device().broadcastEvent(msg);
+      if (measure_count >= (sendInterval / measureInterval)) {
+        measure_count = 0;
+        msg.init(device().nextcount(), number(), pm25avg / valid_measure_count, pm10avg / valid_measure_count,  pm25max, pm10max, pm25min, pm10min, flags());
+        device().broadcastEvent(msg);
+      }
       sysclock.add(*this);
     }
 
-    uint32_t delay () {
-      uint16_t d = (max(30, device().getList0().Sendeintervall()) * SYSCLOCK_FACTOR); //add some small random difference between channels
-      return seconds2ticks(d);
-    }
-
     void configChanged() {
+      DPRINT(F("*Messintervall : ")); DDECLN(this->getList1().Messintervall());
+      DPRINT(F("*ReadRetryCount: ")); DDECLN(this->getList1().ReadRetryCount());
     }
 
     void setup(Device<Hal, SDSList0>* dev, uint8_t number, uint16_t addr) {
@@ -129,7 +195,6 @@ class MeasureChannel : public Channel<Hal, SDSList1, EmptyList, List4, PEERS_PER
       DPRINT("FW: ");DDEC(fw.day);DPRINT(".");DDEC(fw.month);DPRINT(".");DDECLN(fw.year);
       sds.setActiveReportingMode();
       sds.setContinuousWorkingPeriod();
-
       sysclock.add(*this);
     }
 
@@ -186,13 +251,12 @@ void setup () {
   sdev.init(hal);
   buttonISR(cfgBtn, CONFIG_BUTTON_PIN);
   sdev.initDone();
-
 }
 
 void loop() {
   bool worked = hal.runready();
   bool poll = sdev.pollRadio();
   if ( worked == false && poll == false ) {
-   hal.activity.savePower<Sleep<>>(hal);
+  // hal.activity.savePower<Sleep<>>(hal);
  }
 }
