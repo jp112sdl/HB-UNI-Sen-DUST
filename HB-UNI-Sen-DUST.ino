@@ -7,12 +7,12 @@
 // define this to read the device id, serial and device type from bootloader section
 // #define USE_OTA_BOOTLOADER
 
-//#define EI_NOTEXTERNAL
+
 #include <AskSinPP.h>
 #include <LowPower.h>
 #include <Register.h>
 #include <MultiChannelDevice.h>
-#include <SdsDustSensor.h>
+#include <SdsDustSensor.h>       //https://github.com/lewapek/sds-dust-sensors-arduino-library
 
 #define CONFIG_BUTTON_PIN  8
 #define LED_PIN            4
