@@ -27,8 +27,8 @@ using namespace as;
 
 // define all device properties
 const struct DeviceInfo PROGMEM devinfo = {
-  {0xF3, 0x14, 0x00},          // Device ID
-  "JPDUST0000",                // Device Serial
+  {0xF3, 0x14, 0x01},          // Device ID
+  "JPDUST0001",                // Device Serial
   {0xF3, 0x14},                // Device Model
   0x10,                        // Firmware Version
   0x53,                        // Device Type
@@ -87,9 +87,9 @@ class MeasureEventMsg : public Message {
     void init(uint8_t msgcnt, uint8_t channel, uint16_t pm25avg, uint16_t pm10avg,uint16_t pm25max, uint16_t pm10max,uint16_t pm25min, uint16_t pm10min, uint8_t flags) {
       Message::init(0x17, msgcnt, 0x53, BIDI | WKMEUP, channel & 0xff, (flags) & 0xff);
 
-      DPRINT("pm25avg: ");DDECLN(pm25avg);
-      DPRINT("pm25max: ");DDECLN(pm25max);
-      DPRINT("pm25min: ");DDECLN(pm25min);
+      DPRINT(F("pm25avg: "));DDEC(pm25avg);DPRINT(F(", pm10avg: "));DDECLN(pm25avg);
+      DPRINT(F("pm25max: "));DDEC(pm25max);DPRINT(F(", pm10max: "));DDECLN(pm25max);
+      DPRINT(F("pm25min: "));DDEC(pm25min);DPRINT(F(", pm10min: "));DDECLN(pm25min);
 
       pload[0] = (pm25avg >> 8) & 0xff;
       pload[1] = pm25avg & 0xff;
@@ -125,7 +125,7 @@ class MeasureChannel : public Channel<Hal, SDSList1, EmptyList, List4, PEERS_PER
     virtual ~MeasureChannel () {}
 
     void measure() {
-      DPRINTLN("MEASURE...");
+      DPRINT("MEASURE... #");DDECLN(measure_count+1);
 
       if (measure_count == 0) {
         valid_measure_count = 0;
@@ -142,15 +142,15 @@ class MeasureChannel : public Channel<Hal, SDSList1, EmptyList, List4, PEERS_PER
 
       while (retrycount < this->getList1().ReadRetryCount()) {
         retrycount++;
-        if (!pm.isOk()) { DPRINT("FAIL - retry #");DDECLN(retrycount); _delay_ms(200); pm = sds.readPm(); error_flag = pm.status;} else break;//second chance :)
+        if (!pm.isOk()) { DPRINT(F("FAIL - retry #"));DDECLN(retrycount); _delay_ms(200); pm = sds.readPm(); error_flag = pm.status;} else break;//second chance :)
         sds.setActiveReportingMode();
       }
 
       if (pm.isOk()) {
         uint16_t pm25 = pm.pm25 * 10;
         uint16_t pm10 = pm.pm10 * 10;
-        DPRINT("PM25: ");DDECLN(pm25);
-        DPRINT("PM10: ");DDECLN(pm10);
+        DPRINT(F("PM25: "));DDECLN(pm25);
+        DPRINT(F("PM10: "));DDECLN(pm10);
 
         if (pm25 > pm25max) pm25max = pm25;
         if (pm10 > pm10max) pm10max = pm10;
@@ -163,7 +163,7 @@ class MeasureChannel : public Channel<Hal, SDSList1, EmptyList, List4, PEERS_PER
 
         valid_measure_count++;
       } else {
-        DPRINTLN("FAIL - again");
+        DPRINTLN(F("FAIL - giving up"));
       }
 
       measure_count++;
